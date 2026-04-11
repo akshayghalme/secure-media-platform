@@ -1,0 +1,13 @@
+# WHY: Docker sends the entire build context to the daemon before building.
+# Excluding these keeps the context small and prevents secrets/artifacts
+# from accidentally ending up in the image.
+
+__pycache__
+*.pyc
+*.pyo
+.env
+venv/
+.git
+.gitignore
+README.md
+*.md
