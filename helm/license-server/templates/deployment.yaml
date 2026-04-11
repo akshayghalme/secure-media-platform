@@ -1,0 +1,106 @@
+{{/*
+  Deployment template for the license server.
+
+  WHY Deployment over StatefulSet: The license server is stateless — all state
+  lives in DynamoDB/Vault/Redis. Deployments give us rolling updates, easy
+  scaling, and simpler operations. StatefulSets are for things that need
+  stable network identities or persistent volumes (like databases).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app: {{ .Release.Name }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  {{/*
+    WHY RollingUpdate: Zero-downtime deployments. maxUnavailable=0 means
+    Kubernetes brings up new pods BEFORE killing old ones. maxSurge=1
+    means only 1 extra pod at a time (controls resource usage during deploy).
+  */}}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{/*
+        WHY securityContext at pod level: Enforces non-root for ALL containers
+        in the pod (including sidecars like Vault Agent). runAsNonRoot=true
+        makes Kubernetes reject any container that tries to run as root.
+        fsGroup=1000 ensures mounted volumes are writable by the app user.
+      */}}
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+      containers:
+        - name: license-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          {{/*
+            WHY container-level securityContext too: Pod-level sets defaults,
+            but container-level is explicit. readOnlyRootFilesystem prevents
+            attackers from writing malicious files. allowPrivilegeEscalation
+            blocks setuid/setgid exploits.
+          */}}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{/*
+            WHY envFrom with secretRef: Injects all keys from the Kubernetes
+            Secret as env vars. This keeps VAULT_TOKEN out of values.yaml
+            and Helm release history. The Secret is managed separately
+            (e.g., via External Secrets Operator or kubectl create secret).
+          */}}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.envSecretRef }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{/*
+            WHY tmpdir volume: We set readOnlyRootFilesystem=true, but
+            uvicorn/Python need to write to /tmp for things like __pycache__
+            and temporary uploads. An emptyDir volume gives a writable /tmp
+            without making the whole filesystem writable.
+          */}}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
