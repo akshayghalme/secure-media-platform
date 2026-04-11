@@ -39,6 +39,7 @@ resource "aws_lambda_function" "trigger_mediaconvert" {
       OUTPUT_BUCKET        = aws_s3_bucket.encrypted_media.id
       MEDIACONVERT_ENDPOINT = var.mediaconvert_endpoint
       MEDIACONVERT_ROLE_ARN = aws_iam_role.mediaconvert.arn
+      MEDIACONVERT_QUEUE   = aws_media_convert_queue.ingestion.arn
       HLS_AES_KEY          = var.hls_aes_key
       HLS_KEY_URI          = var.hls_key_uri
     }
