@@ -27,3 +27,8 @@ output "mediaconvert_role_arn" {
   description = "ARN of the MediaConvert service role"
   value       = aws_iam_role.mediaconvert.arn
 }
+
+output "lambda_trigger_arn" {
+  description = "ARN of the MediaConvert trigger Lambda function"
+  value       = aws_lambda_function.trigger_mediaconvert.arn
+}
