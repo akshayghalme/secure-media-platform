@@ -8,6 +8,7 @@ import boto3
 from fastapi import APIRouter, HTTPException
 from prometheus_client import Counter, Histogram
 
+from app.cache import get_cached_license, set_cached_license
 from app.config import settings
 from app.validators.license import LicenseRequest, LicenseResponse
 from app.vault_client import get_content_key
@@ -24,6 +25,10 @@ LICENSE_LATENCY = Histogram(
     "license_request_duration_seconds",
     "License request latency",
     buckets=[0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1.0],
+)
+CACHE_HITS = Counter(
+    "license_cache_hits_total",
+    "Total license cache hits",
 )
 
 kms_client = boto3.client("kms", region_name=settings.AWS_REGION)
@@ -64,6 +69,12 @@ async def issue_license(request: LicenseRequest):
                        404 if content key not found,
                        500 on internal errors.
     """
+    cached = await get_cached_license(request.content_id, request.user_id)
+    if cached:
+        CACHE_HITS.inc()
+        LICENSE_REQUESTS.labels(status="cached").inc()
+        return LicenseResponse(**cached)
+
     if request.subscription_tier == "free":
         LICENSE_REQUESTS.labels(status="denied").inc()
         raise HTTPException(
@@ -93,9 +104,13 @@ async def issue_license(request: LicenseRequest):
 
     LICENSE_REQUESTS.labels(status="issued").inc()
 
-    return LicenseResponse(
+    response = LicenseResponse(
         content_id=request.content_id,
         decryption_key=plaintext_key,
         expires_at=expires_at.isoformat(),
         license_id=license_id,
     )
+
+    await set_cached_license(request.content_id, request.user_id, response.model_dump())
+
+    return response
