@@ -1,0 +1,56 @@
+---
+# Rotate a single content encryption key
+# Called by rotate-keys.yml with content_item as loop var
+
+- name: "Extract content_id for {{ content_item.content_id.S }}"
+  set_fact:
+    current_content_id: "{{ content_item.content_id.S }}"
+    current_key_id: "{{ content_item.key_id.S }}"
+
+- name: "Generate new data key via KMS for {{ current_content_id }}"
+  command: >
+    aws kms generate-data-key
+    --key-id {{ kms_key_alias }}
+    --key-spec AES_128
+    --region {{ aws_region }}
+    --output json
+  register: new_key_raw
+  changed_when: false
+
+- name: Parse new key
+  set_fact:
+    new_key_data: "{{ new_key_raw.stdout | from_json }}"
+
+- name: "Store new key in Vault for {{ current_content_id }}"
+  uri:
+    url: "{{ vault_addr }}/v1/{{ vault_secret_path }}/{{ current_content_id }}"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    body_format: json
+    body:
+      data:
+        encrypted_key: "{{ new_key_data.CiphertextBlob }}"
+        key_id: "{{ new_key_data.KeyId }}"
+        rotated_at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+    status_code: [200, 204]
+  register: vault_response
+
+- name: "Update DynamoDB mapping for {{ current_content_id }}"
+  command: >
+    aws dynamodb update-item
+    --table-name {{ dynamodb_table }}
+    --key '{"content_id": {"S": "{{ current_content_id }}"}}'
+    --update-expression "SET key_id = :kid, created_at = :ts, previous_key_id = :old"
+    --expression-attribute-values '{
+      ":kid": {"S": "{{ new_key_data.KeyId }}"},
+      ":ts": {"S": "{{ lookup("pipe", "date -u +%Y-%m-%dT%H:%M:%SZ") }}"},
+      ":old": {"S": "{{ current_key_id }}"}
+    }'
+    --region {{ aws_region }}
+    --output json
+  register: dynamo_update
+
+- name: "Log rotation for {{ current_content_id }}"
+  debug:
+    msg: "Rotated key for {{ current_content_id }}: {{ current_key_id }} → {{ new_key_data.KeyId }}"

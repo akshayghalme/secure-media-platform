@@ -1,0 +1,20 @@
+---
+# Key rotation configuration
+aws_region: "ap-south-1"
+project_name: "secure-media-platform"
+environment: "dev"
+
+# DynamoDB table for content-key mapping
+dynamodb_table: "{{ project_name }}-content-keys-{{ environment }}"
+
+# KMS key alias for content encryption
+kms_key_alias: "alias/{{ project_name }}-content-key-{{ environment }}"
+
+# Vault configuration
+vault_addr: "{{ lookup('env', 'VAULT_ADDR') }}"
+vault_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+vault_secret_path: "secret/data/content-keys"
+
+# Rotation policy
+rotation_max_age_days: 30
+key_length_bytes: 16
