@@ -43,3 +43,13 @@ output "eks_cluster_ca" {
   value       = aws_eks_cluster.main.certificate_authority[0].data
   sensitive   = true
 }
+
+output "dynamodb_table_name" {
+  description = "Name of the content keys DynamoDB table"
+  value       = aws_dynamodb_table.content_keys.name
+}
+
+output "dynamodb_table_arn" {
+  description = "ARN of the content keys DynamoDB table"
+  value       = aws_dynamodb_table.content_keys.arn
+}
