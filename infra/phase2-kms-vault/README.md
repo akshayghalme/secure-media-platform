@@ -1,15 +1,16 @@
-# Phase 2 — KMS Key Setup
+# Phase 2 — KMS + Vault on EKS
 
-Two KMS keys for the DRM platform:
+KMS keys for encryption and an EKS cluster with HashiCorp Vault in HA mode.
 
-- **Content Encryption Key** — encrypts/decrypts per-content HLS keys stored in Vault/DynamoDB
+## KMS Keys
+- **Content Encryption Key** — encrypts per-content HLS decryption keys
 - **S3 Encryption Key** — server-side encryption for media buckets
+- Auto-rotation enabled, 30-day deletion window
 
-## Security
-- Automatic key rotation enabled (configurable interval, default 365 days)
-- Key deletion window of 30 days (configurable)
-- Least-privilege key policies
-- S3 key allows S3 service principal access
+## EKS + Vault
+- **VPC** — 2 public + 2 private subnets across AZs, NAT gateway
+- **EKS** — managed cluster with configurable node group
+- **Vault** — HA mode (3 replicas), Raft storage, audit logging, UI enabled
 
 ## Usage
 ```bash
@@ -19,6 +20,15 @@ terraform plan -var="environment=dev"
 terraform apply -var="environment=dev"
 ```
 
+## Post-Deploy
+After apply, initialize and unseal Vault:
+```bash
+aws eks update-kubeconfig --name secure-media-platform-eks-dev
+kubectl exec -n vault vault-0 -- vault operator init
+kubectl exec -n vault vault-0 -- vault operator unseal <key>
+```
+
 ## Outputs
 - `content_key_id` / `content_key_arn` / `content_key_alias`
 - `s3_key_id` / `s3_key_arn`
+- `vpc_id`, `eks_cluster_name`, `eks_cluster_endpoint`
