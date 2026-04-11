@@ -17,3 +17,13 @@ output "encrypted_bucket_arn" {
   description = "ARN of the encrypted media S3 bucket"
   value       = aws_s3_bucket.encrypted_media.arn
 }
+
+output "lambda_trigger_role_arn" {
+  description = "ARN of the Lambda trigger execution role"
+  value       = aws_iam_role.lambda_trigger.arn
+}
+
+output "mediaconvert_role_arn" {
+  description = "ARN of the MediaConvert service role"
+  value       = aws_iam_role.mediaconvert.arn
+}
