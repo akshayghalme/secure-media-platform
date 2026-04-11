@@ -27,3 +27,23 @@ output "mediaconvert_role_arn" {
   description = "ARN of the MediaConvert service role"
   value       = aws_iam_role.mediaconvert.arn
 }
+
+output "lambda_trigger_arn" {
+  description = "ARN of the MediaConvert trigger Lambda function"
+  value       = aws_lambda_function.trigger_mediaconvert.arn
+}
+
+output "mediaconvert_queue_arn" {
+  description = "ARN of the MediaConvert ingestion queue"
+  value       = aws_media_convert_queue.ingestion.arn
+}
+
+output "sns_topic_arn" {
+  description = "ARN of the MediaConvert notifications SNS topic"
+  value       = aws_sns_topic.mediaconvert_notifications.arn
+}
+
+output "job_complete_handler_arn" {
+  description = "ARN of the job completion handler Lambda"
+  value       = aws_lambda_function.job_complete_handler.arn
+}
