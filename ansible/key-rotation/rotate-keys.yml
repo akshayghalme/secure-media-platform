@@ -1,0 +1,46 @@
+---
+# Ansible playbook: rotate content encryption keys older than 30 days
+# Run: ansible-playbook -i inventory.ini rotate-keys.yml
+
+- name: Rotate content encryption keys
+  hosts: local
+  gather_facts: false
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: Scan DynamoDB for content keys older than {{ rotation_max_age_days }} days
+      amazon.aws.dynamodb_table_info:
+        name: "{{ dynamodb_table }}"
+        region: "{{ aws_region }}"
+      register: table_info
+
+    - name: Query stale content keys from DynamoDB
+      command: >
+        aws dynamodb scan
+        --table-name {{ dynamodb_table }}
+        --filter-expression "created_at < :cutoff"
+        --expression-attribute-values '{":cutoff": {"S": "{{ lookup("pipe", "date -u -d \"-" + rotation_max_age_days|string + " days\" +%Y-%m-%dT%H:%M:%SZ") }}"}}'
+        --region {{ aws_region }}
+        --output json
+      register: stale_keys_raw
+      changed_when: false
+
+    - name: Parse stale keys
+      set_fact:
+        stale_keys: "{{ (stale_keys_raw.stdout | from_json).Items | default([]) }}"
+
+    - name: Display stale key count
+      debug:
+        msg: "Found {{ stale_keys | length }} keys older than {{ rotation_max_age_days }} days"
+
+    - name: Rotate each stale key
+      include_tasks: tasks/rotate-single-key.yml
+      loop: "{{ stale_keys }}"
+      loop_control:
+        loop_var: content_item
+      when: stale_keys | length > 0
+
+    - name: Summary
+      debug:
+        msg: "Key rotation complete. {{ stale_keys | length }} keys processed."
