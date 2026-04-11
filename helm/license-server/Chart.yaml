@@ -1,0 +1,9 @@
+# Chart.yaml defines the chart identity.
+# WHY apiVersion v2: v2 is the Helm 3 format. v1 was Helm 2 which required
+# a server-side component (Tiller) — v2 is client-only, simpler, and more secure.
+apiVersion: v2
+name: license-server
+description: DRM license server for content key delivery
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
