@@ -1,0 +1,95 @@
+# -- Number of pod replicas.
+# WHY 2 default: provides basic HA. If one pod dies during a rolling update,
+# the other keeps serving. Scale up via HPA in production (see phase3-hpa).
+replicaCount: 2
+
+image:
+  # -- ECR repository URL (override per environment).
+  repository: ""
+  # -- Pull policy. Always for dev (catches stale caches), IfNotPresent for prod.
+  pullPolicy: IfNotPresent
+  # -- Image tag. Immutable ECR tags mean this uniquely identifies a build.
+  tag: "v1.0.0"
+
+# -- Kubernetes service configuration.
+service:
+  # WHY ClusterIP: The license server should NOT be directly internet-facing.
+  # Traffic comes through CloudFront → ALB → ClusterIP. Exposing via LoadBalancer
+  # would bypass CDN and add unnecessary attack surface.
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+# -- Resource requests and limits.
+# WHY these values: The license server is I/O-bound (Vault + KMS calls).
+# 256Mi handles 4 uvicorn workers comfortably. CPU 250m request ensures
+# the scheduler places pods on nodes with capacity; 500m limit prevents
+# a runaway request from starving other pods.
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "250m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+# -- Environment variables injected into the container.
+# Secrets should come from Kubernetes Secrets (see env.secretRef below),
+# not hardcoded here. These are non-sensitive defaults.
+env:
+  AWS_REGION: "ap-south-1"
+  DYNAMODB_TABLE: "secure-media-platform-content-keys-dev"
+  KMS_KEY_ALIAS: "alias/secure-media-platform-content-key-dev"
+  LICENSE_TTL_HOURS: "48"
+  REDIS_URL: "redis://redis-service:6379"
+
+# -- Reference to a Kubernetes Secret for sensitive env vars (VAULT_TOKEN, etc).
+# WHY separate from env: Secrets are base64-encoded and access-controlled.
+# Putting VAULT_TOKEN in values.yaml would expose it in git history.
+envSecretRef: "license-server-secrets"
+
+# -- Liveness probe configuration.
+# WHY /healthz: Checks if the process is alive. If this fails, Kubernetes
+# kills and restarts the pod. We use a generous failureThreshold (3) to
+# avoid killing pods during transient GC pauses.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  failureThreshold: 3
+
+# -- Readiness probe configuration.
+# WHY /readyz: Checks if the pod can serve traffic (Redis is connected).
+# Unlike liveness, a failed readiness probe just removes the pod from the
+# Service's endpoint list — it doesn't restart it. This prevents sending
+# traffic to pods that lost their Redis connection.
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 2
+
+# -- ServiceAccount configuration.
+# WHY create a dedicated SA: Allows binding IAM roles via IRSA (IAM Roles
+# for Service Accounts). The license server needs KMS decrypt + DynamoDB
+# read permissions — IRSA lets us grant those without baking credentials
+# into the container.
+serviceAccount:
+  create: true
+  name: "license-server"
+  annotations: {}
+  # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/license-server-role
+
+# -- Pod annotations.
+# Vault sidecar injector annotations go here if using Vault Agent.
+podAnnotations: {}
+
+# -- Node selector for pod scheduling.
+nodeSelector: {}
+
+# -- Tolerations for pod scheduling.
+tolerations: []
