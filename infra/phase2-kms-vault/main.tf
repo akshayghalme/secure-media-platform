@@ -14,6 +14,13 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.25"
     }
+    # WHY tls provider: needed by irsa.tf to read the EKS OIDC issuer's
+    # certificate and compute the SHA1 thumbprint that IAM requires
+    # when registering the OIDC provider.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
