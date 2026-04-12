@@ -87,8 +87,15 @@ readinessProbe:
 serviceAccount:
   create: true
   name: "license-server"
+  # -- IRSA role ARN. When set, the template renders the
+  # `eks.amazonaws.com/role-arn` annotation automatically.
+  # Get this from `terraform output -raw license_server_role_arn` in
+  # infra/phase3-eks-license. Leaving it empty means the pod runs with
+  # node-role credentials, which usually lacks KMS decrypt — the
+  # license server will crashloop with AccessDenied on first request.
+  roleArn: ""
+  # -- Additional annotations (merged after roleArn).
   annotations: {}
-  # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/license-server-role
 
 # -- Pod annotations.
 # Vault sidecar injector annotations go here if using Vault Agent.
