@@ -1,0 +1,51 @@
+{{- if .Values.serviceMonitor.enabled }}
+# WHY ServiceMonitor (not plain Prometheus scrape_configs): the standard
+# observability stack on EKS is kube-prometheus-stack, which runs
+# Prometheus Operator. The operator watches for ServiceMonitor objects
+# and rewrites Prometheus's config on the fly — so dropping this CRD in
+# the cluster is the idiomatic way to get scraped. A hand-edited
+# prometheus.yml would be clobbered on every operator reconcile.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "license-server.fullname" . }}
+  labels:
+    {{- include "license-server.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # WHY select by app label, not name: survives future renames of the
+  # Service and allows one ServiceMonitor to pick up multiple related
+  # Services if we ever split read/write paths.
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      # WHY /metrics: matches the `app.mount("/metrics", make_asgi_app())`
+      # in license-server/app/main.py. prometheus_client handles the
+      # exposition format; no extra exporter needed.
+      path: /metrics
+      # WHY 15s: license latency SLO is 200ms p99 and we want enough
+      # resolution to catch minute-long regressions. Going below 10s
+      # just burns Prometheus storage without adding signal.
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      # WHY honor labels off: we want the Prometheus-added `job`,
+      # `namespace`, `pod` labels to be authoritative. If the app ever
+      # exports a conflicting label by mistake, Prometheus wins.
+      honorLabels: false
+      relabelings:
+        # WHY relabel pod → instance: default instance label is the
+        # target's host:port, which churns on every pod restart. Using
+        # the pod name gives stable identities in Grafana dashboards
+        # across rolling updates (pod names don't change mid-life).
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: instance
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+{{- end }}

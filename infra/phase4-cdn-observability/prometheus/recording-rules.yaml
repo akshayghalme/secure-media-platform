@@ -1,0 +1,72 @@
+# Prometheus recording rules for license server SLIs.
+#
+# WHY recording rules: the Grafana dashboards (next task) and alerts
+# (task after that) all compute the same p50/p95/p99 and error-rate
+# expressions. Evaluating them once per interval and storing the result
+# means dashboards render in milliseconds instead of seconds, and alerts
+# evaluate against a guaranteed-consistent view of the data.
+#
+# Apply standalone: `kubectl apply -f recording-rules.yaml` (as a
+# PrometheusRule CRD if using Operator), or paste the `rules:` block
+# into your prometheus rule_files on non-Operator setups.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: license-server-recording
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: license-server.sli
+      # WHY 30s interval: twice the scrape interval. Evaluating faster
+      # than you scrape just re-reads the same samples.
+      interval: 30s
+      rules:
+        # Latency percentiles from the histogram emitted by license.py.
+        # WHY histogram_quantile on a rate(_bucket): standard Prometheus
+        # idiom for sliding-window quantiles. The 5m window smooths out
+        # single-request noise without hiding a minute-long regression.
+        - record: license_server:request_duration_seconds:p50
+          expr: |
+            histogram_quantile(
+              0.50,
+              sum by (le) (rate(license_request_duration_seconds_bucket[5m]))
+            )
+
+        - record: license_server:request_duration_seconds:p95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (rate(license_request_duration_seconds_bucket[5m]))
+            )
+
+        - record: license_server:request_duration_seconds:p99
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (rate(license_request_duration_seconds_bucket[5m]))
+            )
+
+        # Throughput and error rate.
+        - record: license_server:requests:rate5m
+          expr: sum(rate(license_requests_total[5m]))
+
+        - record: license_server:errors:rate5m
+          expr: sum(rate(license_requests_total{status=~"error|denied|not_found"}[5m]))
+
+        # WHY clamp_min on the denominator: when the service is idle
+        # (rate=0) the ratio would be 0/0 = NaN and poison dashboards.
+        # clamp_min(..., 1e-9) keeps the division well-defined and the
+        # result stays effectively zero.
+        - record: license_server:error_ratio:5m
+          expr: |
+            license_server:errors:rate5m
+            / clamp_min(license_server:requests:rate5m, 1e-9)
+
+        # Cache hit ratio — directly feeds the phase4 DoD ("cache hit
+        # ratio in Grafana").
+        - record: license_server:cache_hit_ratio:5m
+          expr: |
+            sum(rate(license_cache_hits_total[5m]))
+            / clamp_min(sum(rate(license_requests_total[5m])), 1e-9)
