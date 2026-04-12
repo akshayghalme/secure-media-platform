@@ -207,20 +207,40 @@ Option A is recommended for your first run.
 
 ## 7. Install the license server Helm chart
 
+The chart bundles Bitnami Redis as a subchart (see `Chart.yaml` dependencies). Pull it once before the first install:
+
+```bash
+helm dependency update helm/license-server
+```
+
+Create the Secret first — the pod won't become Ready without `VAULT_TOKEN`:
+
+```bash
+kubectl create secret generic license-server-secrets \
+  --from-literal=VAULT_TOKEN=root \
+  --from-literal=VAULT_ADDR=http://vault.vault.svc.cluster.local:8200
+```
+
+Then install:
+
 ```bash
 helm install license-server helm/license-server \
   --set image.repository="$ECR_REPO" \
   --set image.tag=v1.0.0 \
-  --set env.CORS_ALLOW_ORIGINS=http://localhost:8080 \
-  --set-string envSecretRef=license-server-secrets
-
-# You'll need a Secret for VAULT_TOKEN (dev root token for the walkthrough):
-kubectl create secret generic license-server-secrets \
-  --from-literal=VAULT_TOKEN=root \
-  --from-literal=VAULT_ADDR=http://vault.vault.svc.cluster.local:8200
+  --set env.CORS_ALLOW_ORIGINS=http://localhost:8080
 
 kubectl rollout status deployment/license-server
-kubectl get svc,hpa,servicemonitor -l app=license-server
+kubectl get svc,hpa,servicemonitor,pods -l app=license-server
+# you should see license-server-redis-master-0 as well (the subchart)
+```
+
+Using an external managed Redis (ElastiCache, Upstash) instead? Disable the subchart:
+
+```bash
+helm install license-server helm/license-server \
+  --set image.repository="$ECR_REPO" \
+  --set redis.enabled=false \
+  --set env.REDIS_URL="redis://your-endpoint:6379"
 ```
 
 Smoke test:

@@ -41,7 +41,13 @@ env:
   DYNAMODB_TABLE: "secure-media-platform-content-keys-dev"
   KMS_KEY_ALIAS: "alias/secure-media-platform-content-key-dev"
   LICENSE_TTL_HOURS: "48"
-  REDIS_URL: "redis://redis-service:6379"
+  # WHY this exact hostname: Bitnami's redis subchart creates a Service
+  # named `<release>-redis-master` in the release namespace. When this
+  # chart is installed as `license-server`, that resolves to
+  # `license-server-redis-master.<ns>.svc.cluster.local`. If you disable
+  # the subchart (redis.enabled=false), override REDIS_URL here to point
+  # at ElastiCache / Upstash / etc.
+  REDIS_URL: "redis://license-server-redis-master:6379"
 
 # -- Reference to a Kubernetes Secret for sensitive env vars (VAULT_TOKEN, etc).
 # WHY separate from env: Secrets are base64-encoded and access-controlled.
@@ -130,3 +136,30 @@ nodeSelector: {}
 
 # -- Tolerations for pod scheduling.
 tolerations: []
+
+# -- Bundled Redis subchart (Bitnami).
+# WHY standalone (not replication) by default: the license server uses
+# Redis as a short-TTL cache, not a source of truth. A single master is
+# simpler, cheaper, and if it dies the license server falls back to
+# re-issuing (slower but correct). Flip to replication for production.
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    # WHY auth disabled: keeps the walkthrough one step shorter. For any
+    # shared cluster or prod install, enable auth and mount the password
+    # via an existing secret — never hardcode here.
+    enabled: false
+  master:
+    persistence:
+      # WHY persistence off: cache contents are disposable — losing them
+      # on pod restart just costs a cold-start miss, not data integrity.
+      # Leaving PVCs behind is a common source of leaked storage cost.
+      enabled: false
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "50m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
