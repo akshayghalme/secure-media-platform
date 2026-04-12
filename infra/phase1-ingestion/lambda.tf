@@ -1,22 +1,5 @@
 # --- Lambda Function for S3 trigger ---
 
-variable "hls_aes_key" {
-  description = "AES-128 key for HLS encryption (32-char hex string)"
-  type        = string
-  sensitive   = true
-}
-
-variable "hls_key_uri" {
-  description = "URI where the HLS player retrieves the decryption key"
-  type        = string
-  default     = "https://license.example.com/key"
-}
-
-variable "mediaconvert_endpoint" {
-  description = "Account-specific MediaConvert API endpoint"
-  type        = string
-}
-
 data "archive_file" "lambda_trigger" {
   type        = "zip"
   source_file = "${path.module}/../../lambda/trigger_mediaconvert/handler.py"
