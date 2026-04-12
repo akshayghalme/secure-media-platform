@@ -88,6 +88,28 @@ serviceAccount:
 # Vault sidecar injector annotations go here if using Vault Agent.
 podAnnotations: {}
 
+# -- HorizontalPodAutoscaler configuration.
+# WHY an HPA: license-check traffic is bursty (new release drops, live
+# sports kickoffs). Static replicaCount either wastes money at idle or
+# drops requests under spikes. HPA scales between min/max based on CPU
+# and memory utilization. When enabled, the Deployment's replicas field
+# is ignored — the HPA owns it.
+autoscaling:
+  enabled: true
+  # WHY min=2: keeps HA across a single AZ outage or node drain, even at
+  # 3 AM when traffic is near zero. Going below 2 risks a cold start on
+  # the first request of the day (~2s uvicorn boot + Vault token fetch).
+  minReplicas: 2
+  # WHY max=20: a rough ceiling tied to downstream capacity. Vault's token
+  # auth and KMS GenerateDataKey both have per-second quotas — scaling
+  # beyond 20 pods saturates those before it helps latency. Raise only
+  # after verifying Vault + KMS headroom.
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  # WHY 300s scale-down window: Prevents thrashing on short dips.
+  scaleDownStabilizationSeconds: 300
+
 # -- Node selector for pod scheduling.
 nodeSelector: {}
 

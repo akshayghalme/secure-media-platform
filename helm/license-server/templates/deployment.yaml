@@ -14,7 +14,12 @@ metadata:
     app: {{ .Release.Name }}
     chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
+  # WHY conditional: When the HPA is enabled it owns .spec.replicas. If we
+  # also set it here, every `helm upgrade` would reset replicas to the static
+  # value and fight the HPA until the next reconcile.
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app: {{ .Release.Name }}
