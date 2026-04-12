@@ -86,16 +86,22 @@ aws eks update-kubeconfig --name secure-media-platform-eks-dev --region ap-south
 kubectl get nodes   # should show 2 Ready
 ```
 
-### 2c. Phase 3 — ECR
+### 2c. Phase 3 — ECR + IRSA role for license server
+
+Phase 3 now also provisions the IAM role the license-server pod assumes via IRSA. It looks up phase 2's EKS cluster + OIDC provider via data sources, so phase 2 must be fully applied first.
 
 ```bash
 cd infra/phase3-eks-license
 terraform init
 terraform apply
 export ECR_REPO=$(terraform output -raw ecr_repository_url)
+export LICENSE_ROLE_ARN=$(terraform output -raw license_server_role_arn)
 cd ../..
 echo "$ECR_REPO"
+echo "$LICENSE_ROLE_ARN"
 ```
+
+Save both — they feed into the `helm install` in step 7.
 
 ### 2d. Phase 4 — CloudFront
 
@@ -229,18 +235,25 @@ kubectl create secret generic license-server-secrets \
   --from-literal=VAULT_ADDR=http://vault.vault.svc.cluster.local:8200
 ```
 
-Then install:
+Then install, wiring in the IRSA role ARN from step 2c:
 
 ```bash
 helm install license-server helm/license-server \
   --set image.repository="$ECR_REPO" \
   --set image.tag=v1.0.0 \
-  --set env.CORS_ALLOW_ORIGINS=http://localhost:8080
+  --set env.CORS_ALLOW_ORIGINS=http://localhost:8080 \
+  --set serviceAccount.roleArn="$LICENSE_ROLE_ARN"
 
 kubectl rollout status deployment/license-server
 kubectl get svc,hpa,servicemonitor,pods -l app=license-server
 # you should see license-server-redis-master-0 as well (the subchart)
+
+# Verify the SA picked up the IRSA annotation
+kubectl get sa license-server -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}'
+# should print the role ARN
 ```
+
+**Without `serviceAccount.roleArn` the pod runs with node-role credentials, which lack KMS decrypt. The first license request will fail with `AccessDenied` and the readiness probe stops passing.** If that happens, `helm upgrade --reuse-values --set serviceAccount.roleArn=$LICENSE_ROLE_ARN` fixes it without a full reinstall.
 
 Using an external managed Redis (ElastiCache, Upstash) instead? Disable the subchart:
 
@@ -248,7 +261,8 @@ Using an external managed Redis (ElastiCache, Upstash) instead? Disable the subc
 helm install license-server helm/license-server \
   --set image.repository="$ECR_REPO" \
   --set redis.enabled=false \
-  --set env.REDIS_URL="redis://your-endpoint:6379"
+  --set env.REDIS_URL="redis://your-endpoint:6379" \
+  --set serviceAccount.roleArn="$LICENSE_ROLE_ARN"
 ```
 
 Smoke test:
