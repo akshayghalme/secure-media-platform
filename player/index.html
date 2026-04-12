@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Secure Media Platform — Test Player</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!--
+    WHY hls.js from jsdelivr: pinned minor version for reproducibility.
+    Native HLS only works in Safari; hls.js covers Chrome/Firefox/Edge.
+    We intercept the key loader so segment decryption uses the AES key
+    issued by our license server, not whatever URI the manifest lists.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+  <style>
+    body { font: 14px system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.2rem; }
+    label { display: block; margin: .6rem 0 .2rem; font-weight: 600; }
+    input { width: 100%; padding: .5rem; box-sizing: border-box; font-family: monospace; }
+    button { margin-top: 1rem; padding: .6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+    video { width: 100%; margin-top: 1rem; background: #000; }
+    #status { margin-top: 1rem; padding: .6rem; background: #f4f4f4; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+    .err { background: #fee; color: #900; }
+    .ok { background: #efe; color: #060; }
+  </style>
+</head>
+<body>
+  <h1>Secure Media Platform — Test Player</h1>
+  <p>End-to-end playback test: fetches a license from the license server, then feeds the decryption key into hls.js so CloudFront-delivered encrypted segments actually play.</p>
+
+  <label for="license-url">License server URL</label>
+  <input id="license-url" value="http://localhost:8000/api/v1/license" />
+
+  <label for="manifest-url">HLS manifest URL (signed CloudFront URL)</label>
+  <input id="manifest-url" placeholder="https://d1234.cloudfront.net/abc123/master.m3u8?Policy=...&Signature=...&Key-Pair-Id=..." />
+
+  <label for="content-id">Content ID</label>
+  <input id="content-id" value="demo-movie-001" />
+
+  <label for="user-id">User ID</label>
+  <input id="user-id" value="user-test-01" />
+
+  <label for="tier">Subscription tier</label>
+  <input id="tier" value="premium" />
+
+  <button id="play">Play</button>
+
+  <video id="video" controls></video>
+  <div id="status">Ready.</div>
+
+  <script src="player.js"></script>
+</body>
+</html>
