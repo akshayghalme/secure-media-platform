@@ -1,0 +1,49 @@
+# Standalone Prometheus scrape config for the license server.
+#
+# WHY this file exists alongside the Helm ServiceMonitor: if your cluster
+# runs raw Prometheus (no Operator), ServiceMonitor CRDs are meaningless.
+# Drop this snippet into your prometheus.yml `scrape_configs:` list as a
+# fallback. On clusters with kube-prometheus-stack, use the Helm chart's
+# ServiceMonitor instead — it's the idiomatic path.
+
+- job_name: license-server
+  # WHY kubernetes_sd: static targets rot every time a pod restarts and
+  # gets a new IP. Service discovery lets Prometheus track pods through
+  # rolling updates without a config reload.
+  kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names:
+          - default
+
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /metrics
+
+  relabel_configs:
+    # Only scrape pods belonging to the license-server Deployment.
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      action: keep
+      regex: license-server
+
+    # Only scrape the main container's http port, not sidecars.
+    - source_labels: [__meta_kubernetes_pod_container_port_name]
+      action: keep
+      regex: http
+
+    # WHY rewrite the address: default address is pod IP + declared port.
+    # Fine here, but making it explicit guards against future changes to
+    # the container port name.
+    - source_labels:
+        - __meta_kubernetes_pod_ip
+        - __meta_kubernetes_pod_container_port_number
+      action: replace
+      regex: (.+);(.+)
+      replacement: $1:$2
+      target_label: __address__
+
+    # Stable labels for dashboards.
+    - source_labels: [__meta_kubernetes_namespace]
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      target_label: instance
