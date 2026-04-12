@@ -31,10 +31,27 @@ import httpx
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: seed-content-key.py <content_id>", file=sys.stderr)
+    # WHY an optional --key flag: the demo key-flow requires the SAME
+    # AES key in Vault and in the Lambda's HLS_AES_KEY env var. The
+    # deploy-demo-key.sh wrapper generates one key, feeds it to
+    # terraform, then calls this script with --key so both sides match.
+    # Without --key we generate a random one (useful for testing the
+    # seed path in isolation).
+    args = sys.argv[1:]
+    explicit_key_hex: str | None = None
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--key" and i + 1 < len(args):
+            explicit_key_hex = args[i + 1]
+            i += 2
+        else:
+            positional.append(args[i])
+            i += 1
+    if len(positional) != 1:
+        print("usage: seed-content-key.py [--key <hex>] <content_id>", file=sys.stderr)
         return 2
-    content_id = sys.argv[1]
+    content_id = positional[0]
 
     vault_addr = os.environ["VAULT_ADDR"]
     vault_token = os.environ["VAULT_TOKEN"]
@@ -44,8 +61,15 @@ def main() -> int:
     # WHY 16 bytes: AES-128 matches what MediaConvert's HLS encryption
     # uses by default. AES-256 works too but the HLS spec only formally
     # covers 128-bit; some players choke on 256.
-    key_bytes = secrets.token_bytes(16)
-    print(f"generated AES-128 key: {key_bytes.hex()}")
+    if explicit_key_hex:
+        if len(explicit_key_hex) != 32:
+            print(f"--key must be 32 hex chars (16 bytes), got {len(explicit_key_hex)}", file=sys.stderr)
+            return 2
+        key_bytes = bytes.fromhex(explicit_key_hex)
+        print(f"using provided AES-128 key: {key_bytes.hex()}")
+    else:
+        key_bytes = secrets.token_bytes(16)
+        print(f"generated AES-128 key: {key_bytes.hex()}")
 
     # WHY KMS encrypt: the plaintext key never gets persisted. Vault
     # stores only the KMS ciphertext, so even a full Vault compromise
