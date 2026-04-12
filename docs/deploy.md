@@ -51,14 +51,22 @@ Each phase has its own state. Apply them in dependency order.
 
 ### 2a. Phase 1 — S3 + Lambda + MediaConvert
 
+Phase 1 needs two things that can't come from another module:
+
+- **MediaConvert endpoint** — per-account, activated once via the console (prereq step 0).
+- **Initial HLS AES key** — a placeholder for now; `scripts/deploy-demo-key.sh` rewrites it later to match Vault. Any 32-char hex value works here.
+
 ```bash
+export TF_VAR_mediaconvert_endpoint="$(aws mediaconvert describe-endpoints --region ap-south-1 --query 'Endpoints[0].Url' --output text)"
+export TF_VAR_hls_aes_key="$(openssl rand -hex 16)"   # placeholder, rewritten in step 5
+
 cd infra/phase1-ingestion
 terraform init
 terraform apply
 cd ../..
 ```
 
-Outputs to note: `raw_bucket_id`, `encrypted_bucket_id`.
+Outputs to note: `raw_bucket_id`, `encrypted_bucket_id`, `lambda_trigger_arn`.
 
 ### 2b. Phase 2 — KMS + VPC + EKS + Vault + DynamoDB
 
@@ -155,53 +163,53 @@ kubectl -n vault rollout status statefulset/vault
 
 ---
 
-## 5. Seed a test content key
+## 5. Sync the AES key across Lambda and Vault
 
-The license server reads content keys from Vault. Seed one:
+**This is the step that makes the full license loop actually work.** Phase 1's Lambda reads `HLS_AES_KEY` from its env and hands it to MediaConvert as a static key. The license server returns whatever Vault has at `content-keys/<content_id>`. Both must see the same 16 bytes or playback fails with an opaque hls.js decrypt error.
+
+`scripts/deploy-demo-key.sh` generates one key, pushes it to the Lambda's env, and seeds it into Vault in one shot:
 
 ```bash
-# Port-forward Vault locally
+# Port-forward Vault locally so the seed script can reach it
 kubectl -n vault port-forward svc/vault 8200:8200 &
+
+export AWS_REGION=ap-south-1
 export VAULT_ADDR=http://localhost:8200
 export VAULT_TOKEN=root
 export KMS_KEY_ALIAS=alias/secure-media-platform-content-key-dev
 
-pip install boto3 httpx
-python3 scripts/seed-content-key.py demo-movie-001
+pip install boto3 httpx   # one-time
+./scripts/deploy-demo-key.sh demo-movie-001
 ```
 
-Save the hex key it prints — you'll need it if you want to encrypt HLS segments yourself in step 6.
+Expected output: the generated hex key, "lambda env updated", and "wrote Vault secret at content-keys/demo-movie-001".
+
+**Save the `export TF_VAR_hls_aes_key=...` line it prints.** If you re-run `terraform apply` on phase 1 without this variable set, terraform will reset the Lambda's env to a new placeholder and break playback until you re-run this script.
+
+> **Demo limitation:** every piece of content ends up using the same AES key. The production path is for the Lambda to fetch a per-content key from Vault at invocation time (keyed on the S3 object prefix). That refactor is tracked as follow-up work.
 
 ---
 
 ## 6. Get some encrypted video into the bucket
 
-Easiest path: upload a sample MP4 to the raw bucket and let Phase 1's MediaConvert pipeline do the work.
+Upload a sample MP4 to the raw bucket; the S3 event fires the Lambda, which submits a MediaConvert job that uses the key you just synced.
 
 ```bash
 RAW_BUCKET=$(cd infra/phase1-ingestion && terraform output -raw raw_bucket_id)
-# Grab a small test clip (or use any MP4 you have)
 curl -L -o sample.mp4 \
   "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 aws s3 cp sample.mp4 "s3://$RAW_BUCKET/demo-movie-001/source.mp4"
 ```
 
-Watch the job complete:
+Watch the job complete (takes ~2–5 min for this clip):
 
 ```bash
-aws mediaconvert list-jobs --max-results 5 --region ap-south-1
+aws mediaconvert list-jobs --endpoint-url "$TF_VAR_mediaconvert_endpoint" --max-results 5 --region ap-south-1
 # wait for Status=COMPLETE, then:
 ENC_BUCKET=$(cd infra/phase1-ingestion && terraform output -raw encrypted_bucket_id)
 aws s3 ls "s3://$ENC_BUCKET/demo-movie-001/" --recursive
 # should show master.m3u8 + segments
 ```
-
-> **Note:** Phase 1's Lambda currently lets MediaConvert generate its own AES key. For the license-server flow to decrypt those segments, the key Vault holds must match the key MediaConvert used. The cleanest fix is to drive MediaConvert from a key you generated (pass `StaticKeyProvider` pointing at a URL you control). That refactor is tracked as future work; for this walkthrough, either:
->
-> - **Option A:** skip encryption on the test clip (set MediaConvert's HLS encryption to `DISABLED` for the demo job) — video plays without the license loop but still goes through CloudFront signed URLs. Simpler.
-> - **Option B:** re-encrypt the generated segments locally with the seeded key and re-upload. More realistic but fiddly.
-
-Option A is recommended for your first run.
 
 ---
 
