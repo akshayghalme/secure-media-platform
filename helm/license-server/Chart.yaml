@@ -5,5 +5,18 @@ apiVersion: v2
 name: license-server
 description: DRM license server for content key delivery
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.0.0"
+
+# WHY subchart dependency instead of a separate helm install:
+# the license server's readiness probe checks the Redis connection. If Redis
+# isn't installed, pods never go Ready, the Service has no endpoints, and the
+# whole stack looks broken in ways that take a long time to debug. Bundling
+# Redis as a subchart means `helm install license-server` just works. Teams
+# who want a managed Redis (ElastiCache, Upstash) can set redis.enabled=false
+# and override REDIS_URL in env.
+dependencies:
+  - name: redis
+    version: "19.6.4"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
