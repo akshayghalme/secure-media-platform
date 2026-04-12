@@ -88,6 +88,21 @@ serviceAccount:
 # Vault sidecar injector annotations go here if using Vault Agent.
 podAnnotations: {}
 
+# -- Prometheus ServiceMonitor configuration.
+# WHY gated by enabled: not every cluster runs Prometheus Operator. In
+# clusters without the CRD installed, applying this would fail helm
+# install with "no matches for kind ServiceMonitor". Default on for
+# production, override to false in bare dev clusters.
+serviceMonitor:
+  enabled: true
+  # WHY this label: kube-prometheus-stack's default Prometheus CR only
+  # picks up ServiceMonitors with `release: <stack-release>`. If your
+  # stack was installed under a different release name, override here.
+  labels:
+    release: kube-prometheus-stack
+  interval: 15s
+  scrapeTimeout: 10s
+
 # -- HorizontalPodAutoscaler configuration.
 # WHY an HPA: license-check traffic is bursty (new release drops, live
 # sports kickoffs). Static replicaCount either wastes money at idle or
