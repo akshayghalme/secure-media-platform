@@ -1,0 +1,134 @@
+# Prometheus alerting rules for the license server.
+#
+# WHY these rules query recording rules, not raw metrics: recording rules
+# (see recording-rules.yaml) pre-compute the same p99/error-ratio/cache-hit
+# expressions the Grafana dashboard uses. Alerting against the recorded
+# series guarantees "what fires" == "what you see on the dashboard" — no
+# subtle divergence from different [range] windows or label aggregations.
+#
+# Apply (Operator-managed Prometheus):
+#   kubectl -n monitoring apply -f alert-rules.yaml
+#
+# On non-Operator setups, paste the `groups:` block into prometheus.yml
+# under `rule_files:`.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: license-server-alerts
+  labels:
+    # WHY this label: kube-prometheus-stack's default ruleSelector picks up
+    # PrometheusRules labelled `release: kube-prometheus-stack`. Change if
+    # you overrode `prometheus.prometheusSpec.ruleSelector` in Helm values.
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: license-server
+    phase: "4"
+spec:
+  groups:
+    - name: license-server.slo
+      # WHY 30s: matches the recording-rules interval. Evaluating alerts
+      # faster than the source recording rules just re-checks the same
+      # value and wastes cycles.
+      interval: 30s
+      rules:
+        # ── SLO: p99 latency ────────────────────────────────────────────
+        # WHY 200ms: the Phase 4 DoD in CLAUDE.md says `/license` must
+        # return in < 200ms. This is the single top-line SLO for the
+        # license server.
+        #
+        # WHY `for: 5m`: a single scrape above threshold is usually a
+        # garbage-collection pause or a cold start. Requiring the breach
+        # to hold for 5 minutes filters transient noise while still
+        # paging before a user-visible incident becomes material.
+        - alert: LicenseServerP99LatencyHigh
+          expr: license_server:request_duration_seconds:p99 > 0.2
+          for: 5m
+          labels:
+            severity: critical
+            service: license-server
+            slo: latency
+          annotations:
+            summary: "license server p99 latency > 200ms for 5m"
+            description: |
+              p99 /license latency is {{ $value | humanizeDuration }}
+              over the last 5 minutes — above the 200ms SLO.
+              Check:
+                - Redis cache hit ratio (Grafana: License Server — SLIs)
+                - Vault latency (could be auth token renewal stampede)
+                - HPA: are pods hitting CPU/memory limits?
+            runbook_url: "https://github.com/akshayghalme/secure-media-platform/blob/main/docs/drm-flow.md"
+            dashboard_url: "http://grafana/d/license-server-slis"
+
+        # Warning threshold — pages nobody, but surfaces in Alertmanager
+        # and Slack #alerts-warn so humans notice drift before it becomes
+        # a page. p95 is a better early indicator than p99 because it
+        # moves sooner and is less noisy.
+        - alert: LicenseServerP95LatencyDrifting
+          expr: license_server:request_duration_seconds:p95 > 0.15
+          for: 10m
+          labels:
+            severity: warning
+            service: license-server
+            slo: latency
+          annotations:
+            summary: "license server p95 latency drifting (>150ms for 10m)"
+            description: |
+              p95 latency is {{ $value | humanizeDuration }}. Not a page,
+              but investigate before it becomes one.
+
+        # ── SLO: error rate ─────────────────────────────────────────────
+        # WHY 5%: license failures translate 1:1 to playback failures, so
+        # the tolerance is tight. WHY `for: 2m` instead of 5m: errors
+        # can't be debounced as aggressively as latency because a single
+        # bad deploy produces sustained errors from the first request.
+        - alert: LicenseServerErrorRateHigh
+          expr: license_server:error_ratio:5m > 0.05
+          for: 2m
+          labels:
+            severity: critical
+            service: license-server
+            slo: availability
+          annotations:
+            summary: "license server error ratio > 5%"
+            description: |
+              {{ $value | humanizePercentage }} of /license requests are
+              failing. Likely causes: Vault unreachable, DynamoDB key
+              mapping missing, bad JWT signing key after rotation.
+
+        # ── Cache health ────────────────────────────────────────────────
+        # WHY `< 0.5` and `for: 15m`: the cache is usually warm above 80%.
+        # A sustained drop below 50% means either Redis is evicting
+        # aggressively (sizing), the TTL got shortened, or a new content
+        # catalog is stampeding the cold path. Not urgent (latency alert
+        # will fire first if users notice) but worth investigating.
+        - alert: LicenseServerCacheHitRatioLow
+          expr: license_server:cache_hit_ratio:5m < 0.5
+          for: 15m
+          labels:
+            severity: warning
+            service: license-server
+            slo: efficiency
+          annotations:
+            summary: "license server cache hit ratio < 50% for 15m"
+            description: |
+              Cache hit ratio is {{ $value | humanizePercentage }}.
+              Check Redis memory pressure and the license TTL config
+              (helm values: `licenseServer.cache.ttlSeconds`).
+
+        # ── Absence / down ──────────────────────────────────────────────
+        # WHY an absent() rule: all the above rules go silent if the
+        # license server stops emitting metrics entirely (OOM, crash
+        # loop, service selector broken). `absent()` fires specifically
+        # on the "no data" case so outages don't hide as silence.
+        - alert: LicenseServerNoMetrics
+          expr: absent(license_server:requests:rate5m)
+          for: 3m
+          labels:
+            severity: critical
+            service: license-server
+            slo: availability
+          annotations:
+            summary: "license server emitting no metrics"
+            description: |
+              No `license_server:requests:rate5m` samples for 3 minutes.
+              The service may be down, the ServiceMonitor may be broken,
+              or the recording rule stopped evaluating.

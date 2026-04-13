@@ -30,3 +30,13 @@ output "oac_id" {
   description = "Origin Access Control ID"
   value       = aws_cloudfront_origin_access_control.encrypted_media.id
 }
+
+output "license_alerts_topic_arn" {
+  description = "SNS topic ARN Alertmanager publishes license server alerts to. Feed this into the Alertmanager Helm values (sns.topic_arn)."
+  value       = aws_sns_topic.license_alerts.arn
+}
+
+output "alertmanager_publisher_role_arn" {
+  description = "IAM role ARN for Alertmanager's IRSA ServiceAccount. Annotate the SA with eks.amazonaws.com/role-arn = this."
+  value       = aws_iam_role.alertmanager_publisher.arn
+}

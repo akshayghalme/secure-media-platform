@@ -43,3 +43,25 @@ variable "default_ttl_seconds" {
   type        = number
   default     = 86400
 }
+
+# ── Alerting (phase4-alerts) ──────────────────────────────────────────
+# WHY these are variables instead of data sources into phase3 state:
+# same loose-coupling rationale as `encrypted_media` above — phase4
+# does not want to read phase3's remote state. The operator supplies
+# these at apply time (or via a tfvars file kept out of git).
+variable "eks_oidc_provider_url" {
+  description = "OIDC issuer URL of the EKS cluster (from phase3). Used to build the IRSA trust policy for Alertmanager."
+  type        = string
+}
+
+variable "alertmanager_namespace" {
+  description = "Kubernetes namespace where Alertmanager runs"
+  type        = string
+  default     = "monitoring"
+}
+
+variable "alertmanager_service_account" {
+  description = "ServiceAccount name Alertmanager uses (kube-prometheus-stack default)"
+  type        = string
+  default     = "kube-prometheus-stack-alertmanager"
+}
