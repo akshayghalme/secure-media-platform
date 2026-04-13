@@ -1,0 +1,119 @@
+# Alertmanager configuration for the license server alerts.
+#
+# HOW this plugs in: with kube-prometheus-stack, the canonical path is
+# to set `alertmanager.config` in the chart values. This file is the
+# source of truth — copy it into your Helm values or apply it as an
+# `AlertmanagerConfig` CRD. Do NOT let Helm render the default example
+# config; it swallows these routes silently.
+#
+# Two receivers are wired up:
+#   1. slack-critical / slack-warning — humans
+#   2. sns-license — machine fan-out (PagerDuty bridge, email, Lambda)
+#
+# Route tree matches on `severity` and `service` labels set by the
+# PrometheusRule in ../prometheus/alert-rules.yaml.
+
+global:
+  resolve_timeout: 5m
+  # WHY this lives in values, not here: the webhook URL is a secret.
+  # Supply it via `global.slack_api_url_file` pointing at a mounted
+  # Kubernetes Secret, or inject it with helm --set-file.
+  slack_api_url_file: /etc/alertmanager/secrets/slack/webhook_url
+
+route:
+  # Top-level defaults. Everything not matched by a child goes here.
+  receiver: slack-warning
+  group_by: ["alertname", "service", "severity"]
+  # WHY group_wait is short for pages: you want the first critical
+  # alert out the door fast. group_interval/repeat are longer to
+  # prevent flooding once a page has gone.
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical license alerts → Slack #alerts-critical AND SNS in
+    # parallel. `continue: true` on the first match makes Alertmanager
+    # keep evaluating sibling routes so the same alert fans out to
+    # both receivers — this is how you get one alert → many channels.
+    - matchers:
+        - severity = "critical"
+        - service = "license-server"
+      receiver: slack-critical
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    - matchers:
+        - severity = "critical"
+        - service = "license-server"
+      receiver: sns-license
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Warning severity only goes to Slack — no SNS, no page.
+    - matchers:
+        - severity = "warning"
+        - service = "license-server"
+      receiver: slack-warning
+
+# Suppress the redundant p95 warning when the p99 critical is firing —
+# same underlying problem, two alerts is just noise.
+inhibit_rules:
+  - source_matchers:
+      - alertname = "LicenseServerP99LatencyHigh"
+    target_matchers:
+      - alertname = "LicenseServerP95LatencyDrifting"
+    equal: ["service"]
+
+  # If the service is emitting no metrics, every downstream SLO alert
+  # is a lie. Suppress them while NoMetrics is firing.
+  - source_matchers:
+      - alertname = "LicenseServerNoMetrics"
+    target_matchers:
+      - service = "license-server"
+    equal: ["service"]
+
+receivers:
+  - name: slack-critical
+    slack_configs:
+      - channel: "#alerts-critical"
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: |-
+          {{ range .Alerts }}
+          *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          <{{ .Annotations.dashboard_url }}|Dashboard> · <{{ .Annotations.runbook_url }}|Runbook>
+          {{ end }}
+
+  - name: slack-warning
+    slack_configs:
+      - channel: "#alerts-warn"
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: |-
+          {{ range .Alerts }}
+          {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
+
+  # SNS receiver. WHY `sigv4` block: Alertmanager signs the SNS
+  # Publish call with the IAM role it assumed via IRSA — no static
+  # AWS credentials. The region and role ARN come from the Terraform
+  # outputs in ../outputs.tf.
+  - name: sns-license
+    sns_configs:
+      - topic_arn: "${SNS_TOPIC_ARN}" # from terraform output license_alerts_topic_arn
+        sigv4:
+          region: ap-south-1
+          role_arn: "${ALERTMANAGER_PUBLISHER_ROLE_ARN}"
+        subject: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        message: |-
+          {{ range .Alerts }}
+          {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
+        attributes:
+          severity: "{{ .CommonLabels.severity }}"
+          service: "{{ .CommonLabels.service }}"
